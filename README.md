@@ -86,11 +86,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-lin
 Logs go to `~/Library/Logs/claude-magic-link-watcher/{stdout,stderr}.log`
 (paths set in the plist).
 
-## Known limitation: first open sometimes needs "Try Again"
+## Known limitation: first open always needs "Try Again"
 
-Opening the link occasionally shows a "we were unable to verify you with
-this link" / "could not log you in" error, which then succeeds immediately
-on clicking "Try Again" — no action needed beyond that one click.
+Opening the link consistently shows a "we were unable to verify you with
+this link" / "could not log you in" error on the *first* attempt, every
+time, which then succeeds immediately on clicking "Try Again" — no action
+needed beyond that one click.
 
 Investigated and ruled out:
 - **Timing** — an artificial delay before opening (`OPEN_DELAY_SECONDS`,
@@ -106,11 +107,14 @@ bot-challenge platform and passes a fingerprint/challenge check before the
 token-exchange call succeeds — confirmed by inspecting the actual network
 requests on a real link. A bare HTTP request to the exchange endpoint gets
 blocked outright by Cloudflare (`cf-mitigated: challenge`, a "Just a
-moment..." managed-challenge page) before the app ever sees it, and even
-real browser automation started getting the same challenge after repeated
-requests. It's plausible the very first hit occasionally eats that
-challenge friction (scripted or not) and a retry clears it. Not proven for
-the exact real flow, but it's the most evidence-backed explanation found.
+moment..." managed-challenge page) before the app ever sees it. Given the
+failure is 100% reproducible on the first try and 100% reproducible fixed
+by an immediate retry — not intermittent — the likely mechanism is that
+the first request's response sets a Cloudflare clearance cookie (e.g.
+`__cf_bm`) without itself passing, and the retry succeeds because it now
+carries that cookie. Not proven for the exact real flow, but it's the most
+evidence-backed explanation found, and it fits the always-once-then-always-
+works pattern better than a probabilistic risk-score theory would.
 
 ## Security note
 
