@@ -17,7 +17,7 @@ CONFIRM_TIMEOUT_SECONDS="${CONFIRM_TIMEOUT_SECONDS:-60}"
 mkdir -p "$STATE_DIR"
 touch "$SEEN_FILE"
 
-log() { printf '[magic-link-watcher] %s\n' "$*" >&2; }
+log() { printf '%s [magic-link-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
 
 # Load Proton Bridge IMAP credentials from the existing Claude Desktop MCP config
 # rather than duplicating the password into this script.
@@ -143,7 +143,10 @@ while true; do
   log "Watching $FOLDER for Claude.ai magic-link emails..."
   run_cli notify --folder "$FOLDER" | while IFS= read -r line; do
     case "$line" in
-      '{"event":"new_mail"'*) process_recent_mail ;;
+      '{"event":"new_mail"'*)
+        log "notify event received: $line"
+        process_recent_mail
+        ;;
     esac
   done
   log "notify stream ended (Bridge likely restarted or IMAP dropped) — reconnecting..."
