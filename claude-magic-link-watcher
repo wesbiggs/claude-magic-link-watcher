@@ -11,6 +11,8 @@ SEEN_FILE="$STATE_DIR/seen-ids.txt"
 SUBJECT_PREFIX="${SUBJECT_PREFIX:-Your secure link to Claude.ai is here}"
 SENDER_SUFFIX="${SENDER_SUFFIX:-@mail.anthropic.com}"
 FOLDER="${FOLDER:-INBOX}"
+CONFIRM_BEFORE_OPEN="${CONFIRM_BEFORE_OPEN:-false}"
+CONFIRM_TIMEOUT_SECONDS="${CONFIRM_TIMEOUT_SECONDS:-60}"
 
 mkdir -p "$STATE_DIR"
 touch "$SEEN_FILE"
@@ -25,6 +27,33 @@ done < <(jq -r '.mcpServers["proton-mail-bridge"].env | to_entries[] | "\(.key)=
 
 run_cli() {
   "$NODE_BIN" "$CLI_JS" "$@"
+}
+
+# Optional confirmation gate before opening a link. Off by default. When
+# enabled, shows a native dialog; declining or letting it time out (safe
+# default button) skips the open.
+confirm_open() {
+  local link="$1"
+  if [ "$CONFIRM_BEFORE_OPEN" != "true" ]; then
+    return 0
+  fi
+  local button
+  button=$(osascript - "$link" "$CONFIRM_TIMEOUT_SECONDS" <<'APPLESCRIPT'
+on run argv
+  set theLink to item 1 of argv
+  set theTimeout to (item 2 of argv) as integer
+  try
+    set dlgResult to display dialog "Open this Claude.ai sign-in link?" & return & return & theLink ¬
+      with title "Claude Magic Link Watcher" buttons {"Ignore", "Open"} default button "Ignore" ¬
+      giving up after theTimeout
+    return button returned of dlgResult
+  on error
+    return "Ignore"
+  end try
+end run
+APPLESCRIPT
+  )
+  [ "$button" = "Open" ]
 }
 
 # Fetch recent emails, open the magic link for any unseen match, and mark all
@@ -66,8 +95,12 @@ process_recent_mail() {
     link=$(grep -Eo 'https://claude\.ai/magic-link\?[^][:space:]"'"'"'<>()]+' <<<"$body" | head -1)
 
     if [ -n "$link" ]; then
-      log "Opening magic link"
-      open "$link"
+      if confirm_open "$link"; then
+        log "Opening magic link"
+        open "$link"
+      else
+        log "Confirmation declined or timed out — not opening ($id)"
+      fi
     else
       log "No magic link found in body of $id"
     fi

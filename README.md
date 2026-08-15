@@ -18,7 +18,8 @@ magic sign-in link in the default browser.
    IDLE — no polling). On each event, checks the newest messages for a
    subject match **and** a sender address ending in `@mail.anthropic.com`
    (subject lines are trivially spoofable; the sender check is the actual
-   gate), extracts the magic link from the body, and `open`s it.
+   gate), extracts the magic link from the body, and `open`s it — optionally
+   after a confirmation dialog (see `CONFIRM_BEFORE_OPEN` below).
 5. Tracks opened email IDs on disk so a link is never opened twice, and
    reconnects automatically if the notify stream ends.
 
@@ -43,6 +44,8 @@ for this machine's layout — override them if yours differs:
 | `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
 | `SENDER_SUFFIX` | `@mail.anthropic.com` |
 | `FOLDER` | `INBOX` |
+| `CONFIRM_BEFORE_OPEN` | `false` — set to `true` to require clicking "Open" in a dialog before the link opens |
+| `CONFIRM_TIMEOUT_SECONDS` | `60` — how long the dialog waits; times out to *not* opening |
 
 ## Install
 
@@ -65,7 +68,12 @@ Logs go to `~/Library/Logs/claude-magic-link-watcher/{stdout,stderr}.log`
 
 ## Security note
 
-This automatically completes a sign-in flow with no confirmation step —
-anyone able to trigger that email into the watched inbox gets a live login
-on the machine running this script. It's meant for a personal inbox on a
-trusted machine.
+By default this automatically completes a sign-in flow with no confirmation
+step — anyone able to get such an email delivered into the watched inbox
+gets a live login on the machine running this script. The sender check
+(`SENDER_SUFFIX`) is the real gate here: `mail.anthropic.com` publishes a
+strict DMARC policy (`p=reject`), so a forged sender should be rejected by
+the mail provider before it ever reaches this script. Set
+`CONFIRM_BEFORE_OPEN=true` for an extra manual approval step (a native
+dialog, defaulting to *not* opening if ignored or left to time out). It's
+meant for a personal inbox on a trusted machine either way.
