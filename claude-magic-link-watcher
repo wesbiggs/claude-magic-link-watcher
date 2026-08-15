@@ -1,44 +1,72 @@
-#!/usr/bin/env bash
-# Watches Proton Mail INBOX for "Your secure link to Claude.ai is here" emails
-# and opens the magic sign-in link in the default browser.
-set -uo pipefail
+#!/usr/bin/env node
+// Watches a Proton Mail inbox directly over IMAP IDLE for "Your secure link
+// to Claude.ai is here" emails and opens the magic sign-in link in the
+// default browser. No dependency on proton-mail-bridge-client's CLI — talks
+// to Proton Bridge's local IMAP endpoint directly via imapflow, holding one
+// persistent connection so detection is near-instant instead of paying a
+// fresh-process-per-lookup cost.
+'use strict';
 
-NODE_BIN="${NODE_BIN:-/opt/homebrew/bin/node}"
-CLI_JS="${CLI_JS:-/Users/wes/Library/Application Support/Proton Mail Bridge Client/dist/cli.js}"
-CONFIG_JSON="${CONFIG_JSON:-/Users/wes/Library/Application Support/Claude/claude_desktop_config.json}"
-STATE_DIR="${STATE_DIR:-$HOME/.claude-magic-link-watcher}"
-SEEN_FILE="$STATE_DIR/seen-ids.txt"
-SUBJECT_PREFIX="${SUBJECT_PREFIX:-Your secure link to Claude.ai is here}"
-SENDER_SUFFIX="${SENDER_SUFFIX:-@mail.anthropic.com}"
-FOLDER="${FOLDER:-INBOX}"
-CONFIRM_BEFORE_OPEN="${CONFIRM_BEFORE_OPEN:-false}"
-CONFIRM_TIMEOUT_SECONDS="${CONFIRM_TIMEOUT_SECONDS:-60}"
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const { ImapFlow } = require('imapflow');
+const { simpleParser } = require('mailparser');
 
-mkdir -p "$STATE_DIR"
-touch "$SEEN_FILE"
+const execFileAsync = promisify(execFile);
 
-log() { printf '%s [magic-link-watcher] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+const CONFIG_JSON =
+  process.env.CONFIG_JSON ||
+  '/Users/wes/Library/Application Support/Claude/claude_desktop_config.json';
+const STATE_DIR = process.env.STATE_DIR || path.join(os.homedir(), '.claude-magic-link-watcher');
+const SEEN_FILE = path.join(STATE_DIR, 'seen-ids.txt');
+const SUBJECT_PREFIX = process.env.SUBJECT_PREFIX || 'Your secure link to Claude.ai is here';
+const SENDER_SUFFIX = (process.env.SENDER_SUFFIX || '@mail.anthropic.com').toLowerCase();
+const FOLDER = process.env.FOLDER || 'INBOX';
+const CONFIRM_BEFORE_OPEN = (process.env.CONFIRM_BEFORE_OPEN || 'false') === 'true';
+const CONFIRM_TIMEOUT_SECONDS = parseInt(process.env.CONFIRM_TIMEOUT_SECONDS || '60', 10);
+const RECONNECT_DELAY_MS = 5000;
 
-# Load Proton Bridge IMAP credentials from the existing Claude Desktop MCP config
-# rather than duplicating the password into this script.
-while IFS='=' read -r k v; do
-  [ -n "$k" ] && export "$k=$v"
-done < <(jq -r '.mcpServers["proton-mail-bridge"].env | to_entries[] | "\(.key)=\(.value)"' "$CONFIG_JSON")
+fs.mkdirSync(STATE_DIR, { recursive: true });
+if (!fs.existsSync(SEEN_FILE)) fs.writeFileSync(SEEN_FILE, '');
 
-run_cli() {
-  "$NODE_BIN" "$CLI_JS" "$@"
+function log(msg) {
+  const ts = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+  process.stderr.write(`${ts} [magic-link-watcher] ${msg}\n`);
 }
 
-# Optional confirmation gate before opening a link. Off by default. When
-# enabled, shows a native dialog; declining or letting it time out (safe
-# default button) skips the open.
-confirm_open() {
-  local link="$1"
-  if [ "$CONFIRM_BEFORE_OPEN" != "true" ]; then
-    return 0
-  fi
-  local button
-  button=$(osascript - "$link" "$CONFIRM_TIMEOUT_SECONDS" <<'APPLESCRIPT'
+// Loads Proton Bridge IMAP credentials from the existing Claude Desktop MCP
+// config rather than duplicating the password into this script.
+function loadCredentials() {
+  const cfg = JSON.parse(fs.readFileSync(CONFIG_JSON, 'utf8'));
+  const env = cfg.mcpServers['proton-mail-bridge'].env;
+  return {
+    host: env.PROTONMAIL_IMAP_HOST,
+    port: parseInt(env.PROTONMAIL_IMAP_PORT, 10),
+    secure: env.PROTONMAIL_IMAP_SECURE === 'true',
+    user: env.PROTONMAIL_USERNAME,
+    pass: env.PROTONMAIL_PASSWORD,
+  };
+}
+
+// Dedup key is the email's Message-ID header rather than folder::UID — UIDs
+// can be reassigned across a UIDVALIDITY change, Message-ID is stable.
+function loadSeen() {
+  return new Set(fs.readFileSync(SEEN_FILE, 'utf8').split('\n').filter(Boolean));
+}
+
+function markSeen(id) {
+  fs.appendFileSync(SEEN_FILE, id + '\n');
+}
+
+// Optional confirmation gate before opening a link. Off by default. When
+// enabled, shows a native dialog; declining or letting it time out (safe
+// default button) skips the open.
+async function confirmOpen(link) {
+  if (!CONFIRM_BEFORE_OPEN) return true;
+  const script = `
 on run argv
   set theLink to item 1 of argv
   set theTimeout to (item 2 of argv) as integer
@@ -50,105 +78,158 @@ on run argv
   on error
     return "Ignore"
   end try
-end run
-APPLESCRIPT
-  )
-  [ "$button" = "Open" ]
+end run`;
+  try {
+    const { stdout } = await execFileAsync('osascript', [
+      '-e',
+      script,
+      String(link),
+      String(CONFIRM_TIMEOUT_SECONDS),
+    ]);
+    return stdout.trim() === 'Open';
+  } catch (err) {
+    log(`Confirmation dialog failed (${err.message}) — treating as declined`);
+    return false;
+  }
 }
 
-# Fetch recent emails, open the magic link for any unseen match, and mark all
-# matches (seen or not) as seen so we never re-open the same link twice.
-process_recent_mail() {
-  local emails
-  emails=$(run_cli tool get_emails --args "{\"folder\":\"$FOLDER\",\"limit\":10,\"sortByUid\":\"desc\"}" --json \
-    | jq -c '.structuredContent.emails[]?')
-
-  while IFS= read -r email; do
-    [ -z "$email" ] && continue
-    local id subject from_addr
-    id=$(jq -r '.id' <<<"$email")
-    subject=$(jq -r '.subject' <<<"$email")
-
-    case "$subject" in
-      "$SUBJECT_PREFIX"*) ;;
-      *) continue ;;
-    esac
-
-    if grep -qxF "$id" "$SEEN_FILE"; then
-      continue
-    fi
-    echo "$id" >> "$SEEN_FILE"
-
-    # Subject alone is spoofable — only act if the sender is actually Anthropic.
-    from_addr=$(jq -r '(.from[0].address // "")' <<<"$email" | tr '[:upper:]' '[:lower:]')
-    case "$from_addr" in
-      *"$SENDER_SUFFIX") ;;
-      *)
-        log "Skipping — subject matched but sender is not $SENDER_SUFFIX: $from_addr ($id)"
-        continue
-        ;;
-    esac
-
-    log "Matched: $subject ($id)"
-    local body link
-    body=$(run_cli tool get_email_by_id --args "{\"emailId\":\"$id\"}" --json | jq -r '.structuredContent.text // ""')
-    link=$(grep -Eo 'https://claude\.ai/magic-link\?[^][:space:]"'"'"'<>()]+' <<<"$body" | head -1)
-
-    if [ -n "$link" ]; then
-      if confirm_open "$link"; then
-        log "Opening magic link"
-        open "$link"
-      else
-        log "Confirmation declined or timed out — not opening ($id)"
-      fi
-    else
-      log "No magic link found in body of $id"
-    fi
-  done <<< "$emails"
+function extractLink(text) {
+  if (!text) return null;
+  const m = text.match(/https:\/\/claude\.ai\/magic-link\?[^\s\]\)"'<>]+/);
+  return m ? m[0] : null;
 }
 
-# Prime the seen-list with whatever already matches, so old mail already in
-# the inbox doesn't get opened when the watcher starts (or restarts).
-prime_seen_list() {
-  run_cli tool get_emails --args "{\"folder\":\"$FOLDER\",\"limit\":50,\"sortByUid\":\"desc\"}" --json \
-    | jq -r --arg prefix "$SUBJECT_PREFIX" \
-        '.structuredContent.emails[]? | select(.subject | startswith($prefix)) | .id' \
-    >> "$SEEN_FILE"
+async function openLink(link) {
+  await execFileAsync('open', [link]);
 }
 
-# Proton Bridge may not be up yet (e.g. right after login) or may restart
-# later in the day. Block here until its IMAP connection is actually usable,
-# checking periodically rather than failing outright.
-wait_for_bridge() {
-  local attempt=0
-  while true; do
-    if run_cli tool get_connection_status --json \
-        | jq -e '.structuredContent.imap.ok == true' >/dev/null 2>&1; then
-      log "Proton Bridge IMAP is ready."
-      return 0
-    fi
-    attempt=$((attempt + 1))
-    if (( attempt == 1 || attempt % 8 == 0 )); then
-      log "Waiting for Proton Bridge IMAP to come up (attempt $attempt)..."
-    fi
-    sleep 15
-  done
+// Prime the seen-list with whatever already matches, so old mail already in
+// the inbox doesn't get opened when the watcher starts (or reconnects).
+async function primeSeen(client) {
+  const uids = await client.search({ subject: SUBJECT_PREFIX }, { uid: true });
+  if (!uids || uids.length === 0) return;
+  for await (const msg of client.fetch(uids, { envelope: true }, { uid: true })) {
+    const subject = msg.envelope?.subject || '';
+    if (!subject.startsWith(SUBJECT_PREFIX)) continue;
+    const messageId = msg.envelope?.messageId;
+    if (messageId) markSeen(messageId);
+  }
 }
 
-log "Starting. Waiting for Proton Bridge before watching $FOLDER..."
-while true; do
-  wait_for_bridge
-  log "Priming seen-list from existing mail..."
-  prime_seen_list
-  log "Watching $FOLDER for Claude.ai magic-link emails..."
-  run_cli notify --folder "$FOLDER" | while IFS= read -r line; do
-    case "$line" in
-      '{"event":"new_mail"'*)
-        log "notify event received: $line"
-        process_recent_mail
-        ;;
-    esac
-  done
-  log "notify stream ended (Bridge likely restarted or IMAP dropped) — reconnecting..."
-  sleep 5
-done
+// Fetch a sequence range of newly-arrived messages, open the magic link for
+// any unseen match, and mark all subject matches (seen or not) as seen so we
+// never re-open the same link twice.
+async function handleRange(client, seqRange) {
+  const seen = loadSeen();
+  for await (const msg of client.fetch(seqRange, { source: true })) {
+    let parsed;
+    try {
+      parsed = await simpleParser(msg.source);
+    } catch (err) {
+      log(`Failed to parse message seq=${msg.seq}: ${err.message}`);
+      continue;
+    }
+
+    const subject = parsed.subject || '';
+    if (!subject.startsWith(SUBJECT_PREFIX)) continue;
+
+    const messageId = parsed.messageId || `seq:${msg.seq}:${Date.now()}`;
+    if (seen.has(messageId)) continue;
+    markSeen(messageId);
+    seen.add(messageId);
+
+    // Subject alone is spoofable — only act if the sender is actually Anthropic.
+    const fromAddr = (parsed.from?.value?.[0]?.address || '').toLowerCase();
+    if (!fromAddr.endsWith(SENDER_SUFFIX)) {
+      log(`Skipping — subject matched but sender is not ${SENDER_SUFFIX}: ${fromAddr} (${messageId})`);
+      continue;
+    }
+
+    log(`Matched: ${subject} (${messageId})`);
+    const link = extractLink(parsed.text);
+    if (!link) {
+      log(`No magic link found in body of ${messageId}`);
+      continue;
+    }
+
+    if (await confirmOpen(link)) {
+      log('Opening magic link');
+      await openLink(link);
+    } else {
+      log(`Confirmation declined or timed out — not opening (${messageId})`);
+    }
+  }
+}
+
+async function watchOnce() {
+  const creds = loadCredentials();
+  const isLocalHost = ['127.0.0.1', 'localhost', '::1'].includes(
+    (creds.host || '').trim().toLowerCase(),
+  );
+
+  const client = new ImapFlow({
+    host: creds.host,
+    port: creds.port,
+    secure: creds.secure,
+    doSTARTTLS: creds.secure ? undefined : true,
+    auth: { user: creds.user, pass: creds.pass },
+    tls: isLocalHost ? { rejectUnauthorized: false } : undefined,
+    logger: false,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+  });
+
+  const closed = new Promise((resolve) => {
+    client.on('close', () => resolve());
+  });
+  client.on('error', (err) => log(`IMAP error: ${err.message}`));
+
+  await client.connect();
+  log('Proton Bridge IMAP is ready.');
+  await client.mailboxOpen(FOLDER);
+
+  log('Priming seen-list from existing mail...');
+  await primeSeen(client);
+
+  // Serialize event handling — imapflow can't run overlapping commands, and
+  // 'exists' can fire again before a prior handleRange() finishes.
+  let queue = Promise.resolve();
+  client.on('exists', (data) => {
+    const newCount = data.count - data.prevCount;
+    if (newCount <= 0) return;
+    const range = `${data.prevCount + 1}:${data.count}`;
+    log(`notify event received: +${newCount} in ${FOLDER} (seq ${range})`);
+    queue = queue
+      .then(() => handleRange(client, range))
+      .catch((err) => log(`Error handling new mail: ${err.message}`));
+  });
+
+  // imapflow enters IDLE automatically after a short period of inactivity
+  // (see autoidle() in its source) and emits 'exists' the moment the server
+  // pushes new mail — no manual IDLE management needed here.
+  log(`Watching ${FOLDER} for Claude.ai magic-link emails...`);
+  await closed;
+  log('IMAP connection closed — reconnecting...');
+}
+
+async function main() {
+  log(`Starting. Waiting for Proton Bridge before watching ${FOLDER}...`);
+  process.on('SIGINT', () => process.exit(0));
+  process.on('SIGTERM', () => process.exit(0));
+
+  let attempt = 0;
+  for (;;) {
+    try {
+      await watchOnce();
+      attempt = 0;
+    } catch (err) {
+      attempt += 1;
+      if (attempt === 1 || attempt % 8 === 0) {
+        log(`Waiting for Proton Bridge (attempt ${attempt}): ${err.message}`);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, RECONNECT_DELAY_MS));
+  }
+}
+
+main();

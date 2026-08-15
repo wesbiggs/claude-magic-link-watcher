@@ -1,34 +1,46 @@
 # claude-magic-link-watcher
 
-Watches a Proton Mail inbox (via [proton-mail-bridge-client](https://github.com/googlarz/proton-mail-bridge-client))
-for "Your secure link to Claude.ai is here" emails and automatically opens the
-magic sign-in link in the default browser.
+Watches a Proton Mail inbox directly over IMAP for "Your secure link to
+Claude.ai is here" emails and automatically opens the magic sign-in link in
+the default browser.
+
+Talks to [Proton Bridge](https://proton.me/mail/bridge)'s local IMAP endpoint
+directly via [`imapflow`](https://imapflow.com/) — no dependency on
+[`proton-mail-bridge-client`](https://github.com/googlarz/proton-mail-bridge-client)'s
+CLI. Holding one persistent connection with real IMAP IDLE means detection
+is near-instant, instead of paying a fresh-process-and-reconnect cost (~4s)
+for every lookup.
 
 ## How it works
 
 1. Loads Proton Bridge IMAP credentials at runtime from an existing
    `proton-mail-bridge-client` MCP config (e.g. Claude Desktop's
-   `claude_desktop_config.json`), rather than storing them in this script.
-2. Waits for Proton Bridge's IMAP connection to be ready, retrying
-   indefinitely — handles both a slow start at login and Bridge restarts
-   later in the day.
+   `claude_desktop_config.json`), rather than storing them in this script —
+   it only needs the connection details, not the CLI itself.
+2. Connects and opens one persistent IMAP session, retrying indefinitely if
+   Bridge isn't up yet — handles both a slow start at login and Bridge
+   restarts later in the day.
 3. Primes a "seen" list from mail already in the inbox so existing messages
-   aren't replayed on startup.
-4. Streams new-mail events via `proton-mail-bridge-client notify` (IMAP
-   IDLE — no polling). On each event, checks the newest messages for a
-   subject match **and** a sender address ending in `@mail.anthropic.com`
-   (subject lines are trivially spoofable; the sender check is the actual
-   gate), extracts the magic link from the body, and `open`s it — optionally
-   after a confirmation dialog (see `CONFIRM_BEFORE_OPEN` below).
-5. Tracks opened email IDs on disk so a link is never opened twice, and
-   reconnects automatically if the notify stream ends.
+   aren't replayed on startup or reconnect.
+4. `imapflow` automatically enters IMAP IDLE after a short period of
+   inactivity and emits an event the moment the server pushes new mail. On
+   each event, the newly-arrived message(s) are checked for a subject match
+   **and** a sender address ending in `@mail.anthropic.com` (subject lines
+   are trivially spoofable; the sender check is the actual gate — see
+   *Security note* below), the magic link is extracted from the body, and
+   `open`ed — optionally after a confirmation dialog (see
+   `CONFIRM_BEFORE_OPEN` below).
+5. Tracks opened emails on disk by `Message-ID` (stable across reconnects,
+   unlike IMAP UIDs) so a link is never opened twice, and reconnects
+   automatically if the IMAP connection drops.
 
 ## Requirements
 
 - [Proton Mail Bridge](https://proton.me/mail/bridge) running locally
-- [`proton-mail-bridge-client`](https://github.com/googlarz/proton-mail-bridge-client)
-  installed and configured (its `env` block supplies `PROTONMAIL_*` credentials)
-- `node`, `jq`
+- An existing `proton-mail-bridge-client` MCP config with Proton Bridge's
+  IMAP host/port/credentials (only read for connection details — the CLI
+  itself isn't invoked)
+- `node` (18+)
 
 ## Configuration
 
@@ -37,8 +49,6 @@ for this machine's layout — override them if yours differs:
 
 | Variable | Default |
 | --- | --- |
-| `NODE_BIN` | `/opt/homebrew/bin/node` |
-| `CLI_JS` | path to `proton-mail-bridge-client`'s `dist/cli.js` |
 | `CONFIG_JSON` | path to the MCP config containing Proton Bridge credentials |
 | `STATE_DIR` | `~/.claude-magic-link-watcher` |
 | `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
@@ -50,13 +60,22 @@ for this machine's layout — override them if yours differs:
 ## Install
 
 ```bash
-cp claude-magic-link-watcher ~/.local/bin/
-chmod +x ~/.local/bin/claude-magic-link-watcher
+npm install
+```
+
+Then either run it directly (`./claude-magic-link-watcher`), or symlink it
+onto your `PATH` so `node_modules` still resolves via the script's real path:
+
+```bash
+ln -s "$(pwd)/claude-magic-link-watcher" ~/.local/bin/claude-magic-link-watcher
 ```
 
 To run it as a background service on macOS via `launchd`, edit the paths and
 label in `launchd/gs.wbig.claude-magic-link-watcher.plist` (the `gs.wbig`
-label prefix is mine — swap in your own reverse-DNS scheme) then:
+label prefix is mine — swap in your own reverse-DNS scheme) — note the
+`PATH` set in `EnvironmentVariables` needs to include wherever `node` lives
+(e.g. `/opt/homebrew/bin`), since launchd's default `PATH` is minimal and
+won't resolve the script's `#!/usr/bin/env node` shebang otherwise. Then:
 
 ```bash
 cp launchd/gs.wbig.claude-magic-link-watcher.plist ~/Library/LaunchAgents/
