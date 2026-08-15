@@ -86,6 +86,32 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-lin
 Logs go to `~/Library/Logs/claude-magic-link-watcher/{stdout,stderr}.log`
 (paths set in the plist).
 
+## Known limitation: first open sometimes needs "Try Again"
+
+Opening the link occasionally shows a "we were unable to verify you with
+this link" / "could not log you in" error, which then succeeds immediately
+on clicking "Try Again" — no action needed beyond that one click.
+
+Investigated and ruled out:
+- **Timing** — an artificial delay before opening (`OPEN_DELAY_SECONDS`,
+  tested up to 30s) made no difference.
+- **A missed OS-level app-handoff dialog** — the `client=desktop_app` link
+  variant looked like it might trigger a native "Open in Claude?"
+  confirmation (Claude Desktop registers a `claude://` URL scheme) that
+  automation could silently miss. Watched for it directly on a real
+  failure: no such dialog appears.
+
+Leading suspect: Cloudflare. The magic-link page loads Cloudflare's
+bot-challenge platform and passes a fingerprint/challenge check before the
+token-exchange call succeeds — confirmed by inspecting the actual network
+requests on a real link. A bare HTTP request to the exchange endpoint gets
+blocked outright by Cloudflare (`cf-mitigated: challenge`, a "Just a
+moment..." managed-challenge page) before the app ever sees it, and even
+real browser automation started getting the same challenge after repeated
+requests. It's plausible the very first hit occasionally eats that
+challenge friction (scripted or not) and a retry clears it. Not proven for
+the exact real flow, but it's the most evidence-backed explanation found.
+
 ## Security note
 
 By default this automatically completes a sign-in flow with no confirmation
