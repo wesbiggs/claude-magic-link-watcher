@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Watches Proton Mail INBOX for "Your secure link to Claude.ai is here" emails
+# and opens the magic sign-in link in the default browser.
+set -uo pipefail
+
+NODE_BIN="${NODE_BIN:-/opt/homebrew/bin/node}"
+CLI_JS="${CLI_JS:-/Users/wes/Library/Application Support/Proton Mail Bridge Client/dist/cli.js}"
+CONFIG_JSON="${CONFIG_JSON:-/Users/wes/Library/Application Support/Claude/claude_desktop_config.json}"
+STATE_DIR="${STATE_DIR:-$HOME/.claude-magic-link-watcher}"
+SEEN_FILE="$STATE_DIR/seen-ids.txt"
+SUBJECT_PREFIX="${SUBJECT_PREFIX:-Your secure link to Claude.ai is here}"
+FOLDER="${FOLDER:-INBOX}"
+
+mkdir -p "$STATE_DIR"
+touch "$SEEN_FILE"
+
+log() { printf '[magic-link-watcher] %s\n' "$*" >&2; }
+
+# Load Proton Bridge IMAP credentials from the existing Claude Desktop MCP config
+# rather than duplicating the password into this script.
+while IFS='=' read -r k v; do
+  [ -n "$k" ] && export "$k=$v"
+done < <(jq -r '.mcpServers["proton-mail-bridge"].env | to_entries[] | "\(.key)=\(.value)"' "$CONFIG_JSON")
+
+run_cli() {
+  "$NODE_BIN" "$CLI_JS" "$@"
+}
+
+# Fetch recent emails, open the magic link for any unseen match, and mark all
+# matches (seen or not) as seen so we never re-open the same link twice.
+process_recent_mail() {
+  local emails
+  emails=$(run_cli tool get_emails --args "{\"folder\":\"$FOLDER\",\"limit\":10,\"sortByUid\":\"desc\"}" --json \
+    | jq -c '.structuredContent.emails[]?')
+
+  while IFS= read -r email; do
+    [ -z "$email" ] && continue
+    local id subject
+    id=$(jq -r '.id' <<<"$email")
+    subject=$(jq -r '.subject' <<<"$email")
+
+    case "$subject" in
+      "$SUBJECT_PREFIX"*) ;;
+      *) continue ;;
+    esac
+
+    if grep -qxF "$id" "$SEEN_FILE"; then
+      continue
+    fi
+    echo "$id" >> "$SEEN_FILE"
+
+    log "Matched: $subject ($id)"
+    local body link
+    body=$(run_cli tool get_email_by_id --args "{\"emailId\":\"$id\"}" --json | jq -r '.structuredContent.text // ""')
+    link=$(grep -Eo 'https://claude\.ai/magic-link\?[^][:space:]"'"'"'<>()]+' <<<"$body" | head -1)
+
+    if [ -n "$link" ]; then
+      log "Opening magic link"
+      open "$link"
+    else
+      log "No magic link found in body of $id"
+    fi
+  done <<< "$emails"
+}
+
+# Prime the seen-list with whatever already matches, so old mail already in
+# the inbox doesn't get opened when the watcher starts (or restarts).
+prime_seen_list() {
+  run_cli tool get_emails --args "{\"folder\":\"$FOLDER\",\"limit\":50,\"sortByUid\":\"desc\"}" --json \
+    | jq -r --arg prefix "$SUBJECT_PREFIX" \
+        '.structuredContent.emails[]? | select(.subject | startswith($prefix)) | .id' \
+    >> "$SEEN_FILE"
+}
+
+# Proton Bridge may not be up yet (e.g. right after login) or may restart
+# later in the day. Block here until its IMAP connection is actually usable,
+# checking periodically rather than failing outright.
+wait_for_bridge() {
+  local attempt=0
+  while true; do
+    if run_cli tool get_connection_status --json \
+        | jq -e '.structuredContent.imap.ok == true' >/dev/null 2>&1; then
+      log "Proton Bridge IMAP is ready."
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    if (( attempt == 1 || attempt % 8 == 0 )); then
+      log "Waiting for Proton Bridge IMAP to come up (attempt $attempt)..."
+    fi
+    sleep 15
+  done
+}
+
+log "Starting. Waiting for Proton Bridge before watching $FOLDER..."
+while true; do
+  wait_for_bridge
+  log "Priming seen-list from existing mail..."
+  prime_seen_list
+  log "Watching $FOLDER for Claude.ai magic-link emails..."
+  run_cli notify --folder "$FOLDER" | while IFS= read -r line; do
+    case "$line" in
+      '{"event":"new_mail"'*) process_recent_mail ;;
+    esac
+  done
+  log "notify stream ended (Bridge likely restarted or IMAP dropped) — reconnecting..."
+  sleep 5
+done
