@@ -56,6 +56,7 @@ for this machine's layout — override them if yours differs:
 | `FOLDER` | `INBOX` |
 | `CONFIRM_BEFORE_OPEN` | `false` — set to `true` to require clicking "Open" in a dialog before the link opens |
 | `CONFIRM_TIMEOUT_SECONDS` | `60` — how long the dialog waits; times out to *not* opening |
+| `OPEN_DELAY_SECONDS` | `0` — wait this long after a match before opening the link |
 
 ## Install
 

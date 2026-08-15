@@ -27,7 +27,12 @@ const SENDER_SUFFIX = (process.env.SENDER_SUFFIX || '@mail.anthropic.com').toLow
 const FOLDER = process.env.FOLDER || 'INBOX';
 const CONFIRM_BEFORE_OPEN = (process.env.CONFIRM_BEFORE_OPEN || 'false') === 'true';
 const CONFIRM_TIMEOUT_SECONDS = parseInt(process.env.CONFIRM_TIMEOUT_SECONDS || '60', 10);
+const OPEN_DELAY_SECONDS = parseInt(process.env.OPEN_DELAY_SECONDS || '0', 10);
 const RECONNECT_DELAY_MS = 5000;
+
+function sleep(seconds) {
+  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+}
 
 fs.mkdirSync(STATE_DIR, { recursive: true });
 if (!fs.existsSync(SEEN_FILE)) fs.writeFileSync(SEEN_FILE, '');
@@ -120,8 +125,16 @@ async function primeSeen(client) {
 // any unseen match, and mark all subject matches (seen or not) as seen so we
 // never re-open the same link twice.
 async function handleRange(client, seqRange) {
-  const seen = loadSeen();
+  // Drain the IMAP fetch fully before any processing (parsing, delays,
+  // opening) — imapflow warns against running other work mid-fetch-loop, and
+  // OPEN_DELAY_SECONDS can pause here for a while.
+  const raw = [];
   for await (const msg of client.fetch(seqRange, { source: true })) {
+    raw.push(msg);
+  }
+
+  const seen = loadSeen();
+  for (const msg of raw) {
     let parsed;
     try {
       parsed = await simpleParser(msg.source);
@@ -150,6 +163,11 @@ async function handleRange(client, seqRange) {
     if (!link) {
       log(`No magic link found in body of ${messageId}`);
       continue;
+    }
+
+    if (OPEN_DELAY_SECONDS > 0) {
+      log(`Waiting ${OPEN_DELAY_SECONDS}s before opening (OPEN_DELAY_SECONDS)...`);
+      await sleep(OPEN_DELAY_SECONDS);
     }
 
     if (await confirmOpen(link)) {
