@@ -86,14 +86,20 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-lin
 Logs go to `~/Library/Logs/claude-magic-link-watcher/{stdout,stderr}.log`
 (paths set in the plist).
 
-## Known limitation: first open always needs "Try Again"
+## Known behavior: first open always needs "Try Again"
 
 Opening the link consistently shows a "we were unable to verify you with
 this link" / "could not log you in" error on the *first* attempt, every
 time, which then succeeds immediately on clicking "Try Again" — no action
 needed beyond that one click.
 
-Investigated and ruled out:
+**This is not specific to this script or to automation.** Confirmed by
+manually clicking the link straight out of the email, watcher not running:
+identical behavior. Whatever's going on happens the same way for a plain
+human click, so it isn't `open()` vs. a "real" click, timing, or anything
+this script does — it's inherent to Claude.ai's magic-link flow itself.
+
+Investigated and ruled out as automation-specific causes:
 - **Timing** — an artificial delay before opening (`OPEN_DELAY_SECONDS`,
   tested up to 30s) made no difference.
 - **A missed OS-level app-handoff dialog** — the `client=desktop_app` link
@@ -101,20 +107,23 @@ Investigated and ruled out:
   confirmation (Claude Desktop registers a `claude://` URL scheme) that
   automation could silently miss. Watched for it directly on a real
   failure: no such dialog appears.
+- **The `open()` call vs. a genuine click** — manually clicking the link
+  produces the identical fail-then-succeed pattern.
 
-Leading suspect: Cloudflare. The magic-link page loads Cloudflare's
-bot-challenge platform and passes a fingerprint/challenge check before the
-token-exchange call succeeds — confirmed by inspecting the actual network
-requests on a real link. A bare HTTP request to the exchange endpoint gets
-blocked outright by Cloudflare (`cf-mitigated: challenge`, a "Just a
-moment..." managed-challenge page) before the app ever sees it. Given the
-failure is 100% reproducible on the first try and 100% reproducible fixed
-by an immediate retry — not intermittent — the likely mechanism is that
-the first request's response sets a Cloudflare clearance cookie (e.g.
-`__cf_bm`) without itself passing, and the retry succeeds because it now
-carries that cookie. Not proven for the exact real flow, but it's the most
-evidence-backed explanation found, and it fits the always-once-then-always-
-works pattern better than a probabilistic risk-score theory would.
+Leading suspect: Cloudflare, which sits in front of the token-exchange
+endpoint (confirmed by inspecting the actual network requests on a real
+link — the page loads Cloudflare's bot-challenge platform and passes a
+fingerprint/challenge check before the exchange call succeeds; a bare HTTP
+request to that endpoint gets blocked outright with `cf-mitigated:
+challenge`). Given the failure is 100% reproducible on the first try and
+100% fixed by an immediate retry — for a human click just as much as for
+automation — the likely mechanism is that the first request's response
+sets a Cloudflare clearance cookie (e.g. `__cf_bm`) without itself passing,
+and the retry succeeds because it now carries that cookie. That would make
+this a property of any cold browser session's first visit to the endpoint,
+not anything specific to how the link gets opened. Not proven, but the
+most evidence-backed explanation found — and either way, it's on Anthropic
+and/or Cloudflare's side, not something to chase further here.
 
 ## Security note
 
