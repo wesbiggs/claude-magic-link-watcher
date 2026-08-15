@@ -9,6 +9,7 @@ CONFIG_JSON="${CONFIG_JSON:-/Users/wes/Library/Application Support/Claude/claude
 STATE_DIR="${STATE_DIR:-$HOME/.claude-magic-link-watcher}"
 SEEN_FILE="$STATE_DIR/seen-ids.txt"
 SUBJECT_PREFIX="${SUBJECT_PREFIX:-Your secure link to Claude.ai is here}"
+SENDER_SUFFIX="${SENDER_SUFFIX:-@mail.anthropic.com}"
 FOLDER="${FOLDER:-INBOX}"
 
 mkdir -p "$STATE_DIR"
@@ -35,7 +36,7 @@ process_recent_mail() {
 
   while IFS= read -r email; do
     [ -z "$email" ] && continue
-    local id subject
+    local id subject from_addr
     id=$(jq -r '.id' <<<"$email")
     subject=$(jq -r '.subject' <<<"$email")
 
@@ -48,6 +49,16 @@ process_recent_mail() {
       continue
     fi
     echo "$id" >> "$SEEN_FILE"
+
+    # Subject alone is spoofable — only act if the sender is actually Anthropic.
+    from_addr=$(jq -r '(.from[0].address // "")' <<<"$email" | tr '[:upper:]' '[:lower:]')
+    case "$from_addr" in
+      *"$SENDER_SUFFIX") ;;
+      *)
+        log "Skipping — subject matched but sender is not $SENDER_SUFFIX: $from_addr ($id)"
+        continue
+        ;;
+    esac
 
     log "Matched: $subject ($id)"
     local body link

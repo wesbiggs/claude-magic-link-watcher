@@ -16,7 +16,9 @@ magic sign-in link in the default browser.
    aren't replayed on startup.
 4. Streams new-mail events via `proton-mail-bridge-client notify` (IMAP
    IDLE — no polling). On each event, checks the newest messages for a
-   subject match, extracts the magic link from the body, and `open`s it.
+   subject match **and** a sender address ending in `@mail.anthropic.com`
+   (subject lines are trivially spoofable; the sender check is the actual
+   gate), extracts the magic link from the body, and `open`s it.
 5. Tracks opened email IDs on disk so a link is never opened twice, and
    reconnects automatically if the notify stream ends.
 
@@ -39,6 +41,7 @@ for this machine's layout — override them if yours differs:
 | `CONFIG_JSON` | path to the MCP config containing Proton Bridge credentials |
 | `STATE_DIR` | `~/.claude-magic-link-watcher` |
 | `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
+| `SENDER_SUFFIX` | `@mail.anthropic.com` |
 | `FOLDER` | `INBOX` |
 
 ## Install
