@@ -1,10 +1,10 @@
 # claude-magic-link-watcher
 
-Watches a Proton Mail inbox directly over IMAP for "Your secure link to
+Watches a Proton Mail Bridge inbox directly over IMAP for "Your secure link to
 Claude.ai is here" emails and automatically opens the magic sign-in link in
 the default browser.
 
-Talks to [Proton Bridge](https://proton.me/mail/bridge)'s local IMAP endpoint
+Talks to [Proton Mail Bridge](https://proton.me/mail/bridge)'s local IMAP endpoint
 directly via [`imapflow`](https://imapflow.com/) — no dependency on
 [`proton-mail-bridge-client`](https://github.com/googlarz/proton-mail-bridge-client)'s
 CLI. Holding one persistent connection with real IMAP IDLE means detection
@@ -57,6 +57,38 @@ for this machine's layout — override them if yours differs:
 | `CONFIRM_BEFORE_OPEN` | `false` — set to `true` to require clicking "Open" in a dialog before the link opens |
 | `CONFIRM_TIMEOUT_SECONDS` | `60` — how long the dialog waits; times out to *not* opening |
 | `OPEN_DELAY_SECONDS` | `0` — wait this long after a match before opening the link |
+| `IDLE_THRESHOLD_SECONDS` | `0` (disabled) — skip opening if the keyboard/mouse have been idle at least this long |
+
+### `CONFIG_JSON` format
+
+`loadCredentials()` only reads five fields out of an MCP-config-shaped JSON
+file — it doesn't actually require Proton Bridge, `proton-mail-bridge-client`,
+or Claude Desktop. Any IMAP account (Proton Bridge's local endpoint, Gmail
+with an app password, Fastmail, self-hosted, etc.) works as long as the file
+at `CONFIG_JSON` has this shape:
+
+```json
+{
+  "mcpServers": {
+    "proton-mail-bridge": {
+      "env": {
+        "PROTONMAIL_IMAP_HOST": "127.0.0.1",
+        "PROTONMAIL_IMAP_PORT": "1143",
+        "PROTONMAIL_IMAP_SECURE": "false",
+        "PROTONMAIL_USERNAME": "you@example.com",
+        "PROTONMAIL_PASSWORD": "your-imap-password"
+      }
+    }
+  }
+}
+```
+
+The `mcpServers.proton-mail-bridge` key path and the `PROTONMAIL_*` variable
+names are fixed (the script looks them up literally) — only the values need
+to point at your actual IMAP server. For a non-Bridge IMAP host, set
+`PROTONMAIL_IMAP_SECURE` to `"true"` and `PROTONMAIL_IMAP_PORT` to your
+provider's TLS port (e.g. `993`); `PROTONMAIL_IMAP_HOST` doesn't need to be
+`127.0.0.1` — Bridge is just what makes that the common case.
 
 ## Install
 
@@ -86,9 +118,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-lin
 Logs go to `~/Library/Logs/claude-magic-link-watcher/{stdout,stderr}.log`
 (paths set in the plist).
 
-## Known behavior: first open always needs "Try Again"
+## Known behavior: open may need manual click on "Try Again"
 
-Opening the link consistently shows a "we were unable to verify you with
+Opening the link may show a "we were unable to verify you with
 this link" / "could not log you in" error on the *first* attempt, every
 time, which then succeeds immediately on clicking "Try Again" — no action
 needed beyond that one click.
@@ -115,7 +147,7 @@ endpoint (confirmed by inspecting the actual network requests on a real
 link — the page loads Cloudflare's bot-challenge platform and passes a
 fingerprint/challenge check before the exchange call succeeds; a bare HTTP
 request to that endpoint gets blocked outright with `cf-mitigated:
-challenge`). Given the failure is 100% reproducible on the first try and
+challenge`). Given the failure is 100% reproducible once it begins and
 100% fixed by an immediate retry — for a human click just as much as for
 automation — the likely mechanism is that the first request's response
 sets a Cloudflare clearance cookie (e.g. `__cf_bm`) without itself passing,
@@ -136,3 +168,11 @@ the mail provider before it ever reaches this script. Set
 `CONFIRM_BEFORE_OPEN=true` for an extra manual approval step (a native
 dialog, defaulting to *not* opening if ignored or left to time out). It's
 meant for a personal inbox on a trusted machine either way.
+
+Set `IDLE_THRESHOLD_SECONDS` to skip auto-opening whenever the machine has
+been idle (no keyboard/mouse/trackpad input) for at least that long — checked
+via macOS's `IOHIDSystem` idle counter (`ioreg -c IOHIDSystem`, `HIDIdleTime`
+in nanoseconds) right before opening. A legitimate sign-in is normally
+requested by someone actively at the keyboard; a link arriving while the
+machine has sat idle for several minutes is a signal worth not auto-completing
+even if the sender check passes.

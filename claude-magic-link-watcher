@@ -28,6 +28,7 @@ const FOLDER = process.env.FOLDER || 'INBOX';
 const CONFIRM_BEFORE_OPEN = (process.env.CONFIRM_BEFORE_OPEN || 'false') === 'true';
 const CONFIRM_TIMEOUT_SECONDS = parseInt(process.env.CONFIRM_TIMEOUT_SECONDS || '60', 10);
 const OPEN_DELAY_SECONDS = parseInt(process.env.OPEN_DELAY_SECONDS || '0', 10);
+const IDLE_THRESHOLD_SECONDS = parseInt(process.env.IDLE_THRESHOLD_SECONDS || '0', 10);
 const RECONNECT_DELAY_MS = 5000;
 
 function sleep(seconds) {
@@ -96,6 +97,15 @@ end run`;
     log(`Confirmation dialog failed (${err.message}) — treating as declined`);
     return false;
   }
+}
+
+// Seconds since the last keyboard/mouse/trackpad event, via IOKit's HID idle
+// counter (nanoseconds). Used to skip auto-opening a link when nobody's
+// actually at the machine to have triggered the sign-in themselves.
+async function getIdleSeconds() {
+  const { stdout } = await execFileAsync('ioreg', ['-c', 'IOHIDSystem']);
+  const m = stdout.match(/"HIDIdleTime"\s*=\s*(\d+)/);
+  return m ? Math.floor(parseInt(m[1], 10) / 1e9) : 0;
 }
 
 function extractLink(text) {
@@ -168,6 +178,16 @@ async function handleRange(client, seqRange) {
     if (OPEN_DELAY_SECONDS > 0) {
       log(`Waiting ${OPEN_DELAY_SECONDS}s before opening (OPEN_DELAY_SECONDS)...`);
       await sleep(OPEN_DELAY_SECONDS);
+    }
+
+    if (IDLE_THRESHOLD_SECONDS > 0) {
+      const idleSeconds = await getIdleSeconds();
+      if (idleSeconds >= IDLE_THRESHOLD_SECONDS) {
+        log(
+          `System idle ${idleSeconds}s (>= IDLE_THRESHOLD_SECONDS=${IDLE_THRESHOLD_SECONDS}s) — not opening (${messageId})`,
+        );
+        continue;
+      }
     }
 
     if (await confirmOpen(link)) {
