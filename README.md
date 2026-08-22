@@ -225,3 +225,7 @@ machine has sat idle for several minutes is a signal worth not auto-completing
 even if the sender check passes (for example, you might be logging in to
 Claude on a separate device, and you don't want this script to steal the
 magic link).
+
+## License
+
+[Apache License 2.0](LICENSE).

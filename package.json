@@ -8,7 +8,7 @@
   "bin": {
     "claude-magic-link-watcher": "./claude-magic-link-watcher"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "imapflow": "^1.0.164",
     "mailparser": "^3.7.1"
