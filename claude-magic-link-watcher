@@ -58,6 +58,9 @@ const CONFIRM_BEFORE_OPEN = (process.env.CONFIRM_BEFORE_OPEN || 'false') === 'tr
 const CONFIRM_TIMEOUT_SECONDS = parseInt(process.env.CONFIRM_TIMEOUT_SECONDS || '60', 10);
 const OPEN_DELAY_SECONDS = parseInt(process.env.OPEN_DELAY_SECONDS || '0', 10);
 const IDLE_THRESHOLD_SECONDS = parseInt(process.env.IDLE_THRESHOLD_SECONDS || '0', 10);
+const MAGIC_LINK_REGEXP = new RegExp(
+  process.env.MAGIC_LINK_REGEXP || 'https://claude\\.ai/magic-link\\?[^\\s\\]\\)"\'<>]+',
+);
 const RECONNECT_DELAY_MS = 5000;
 
 function sleep(seconds) {
@@ -151,7 +154,7 @@ async function getIdleSeconds() {
 
 function extractLink(text) {
   if (!text) return null;
-  const m = text.match(/https:\/\/claude\.ai\/magic-link\?[^\s\]\)"'<>]+/);
+  const m = text.match(MAGIC_LINK_REGEXP);
   return m ? m[0] : null;
 }
 

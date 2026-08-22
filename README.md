@@ -50,7 +50,7 @@ override them if yours differs:
 | Variable | Default |
 | --- | --- |
 | `ENV_FILE` | `.env` next to the script (its real path, resolved through the `PATH` symlink) |
-| `CONFIG_JSON` | path to the MCP config containing Proton Bridge credentials |
+| `CONFIG_JSON` | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | `STATE_DIR` | `~/.claude-magic-link-watcher` |
 | `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
 | `SENDER_SUFFIX` | `@mail.anthropic.com` |
@@ -59,6 +59,7 @@ override them if yours differs:
 | `CONFIRM_TIMEOUT_SECONDS` | `60` — how long the dialog waits; times out to *not* opening |
 | `OPEN_DELAY_SECONDS` | `0` — wait this long after a match before opening the link |
 | `IDLE_THRESHOLD_SECONDS` | `0` (disabled) — skip opening if the keyboard/mouse have been idle at least this long |
+| `MAGIC_LINK_REGEXP` | `https://claude\.ai/magic-link\?[^\s\]\)"'<>]+` — pattern used to extract the link from the email body (no delimiters/flags, passed to `new RegExp()`) |
 
 ### Credentials: `.env` or `CONFIG_JSON`
 
