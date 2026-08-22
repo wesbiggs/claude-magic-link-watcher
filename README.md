@@ -1,22 +1,22 @@
 # claude-magic-link-watcher
 
-Watches a Proton Mail Bridge inbox directly over IMAP for "Your secure link to
-Claude.ai is here" emails and automatically opens the magic sign-in link in
-the default browser.
+Watches an IMAP inbox via [`imapflow`](https://imapflow.com/) for
+"Your secure link to Claude.ai is here" emails and automatically opens
+the magic sign-in link in the default browser.
 
-Talks to [Proton Mail Bridge](https://proton.me/mail/bridge)'s local IMAP endpoint
-directly via [`imapflow`](https://imapflow.com/) — no dependency on
-[`proton-mail-bridge-client`](https://github.com/googlarz/proton-mail-bridge-client)'s
-CLI. Holding one persistent connection with real IMAP IDLE means detection
-is near-instant, instead of paying a fresh-process-and-reconnect cost (~4s)
-for every lookup.
+Works out of the box with [Proton Mail Bridge](https://proton.me/mail/bridge)'s
+local IMAP endpoint — can share config with
+[`proton-mail-bridge-client`](https://github.com/googlarz/proton-mail-bridge-client) but does not use its CLI. Holding one persistent connection with real IMAP IDLE means
+detection is near-instant, instead of paying a
+fresh-process-and-reconnect cost (~4s) for every lookup.
 
 ## How it works
 
-1. Loads Proton Bridge IMAP credentials at runtime from an existing
-   `proton-mail-bridge-client` MCP config (e.g. Claude Desktop's
-   `claude_desktop_config.json`), rather than storing them in this script —
-   it only needs the connection details, not the CLI itself.
+1. Loads IMAP credentials at runtime from `IMAP_*` environment variables (or
+   a `.env` file), or, failing that, from an existing `proton-mail-bridge-client`
+   MCP config (e.g. Claude Desktop's `claude_desktop_config.json`) — rather
+   than storing them in this script. The MCP config path only needs the
+   connection details, not the CLI itself.
 2. Connects and opens one persistent IMAP session, retrying indefinitely if
    Bridge isn't up yet — handles both a slow start at login and Bridge
    restarts later in the day.
@@ -36,19 +36,20 @@ for every lookup.
 
 ## Requirements
 
-- [Proton Mail Bridge](https://proton.me/mail/bridge) running locally
-- An existing `proton-mail-bridge-client` MCP config with Proton Bridge's
-  IMAP host/port/credentials (only read for connection details — the CLI
-  itself isn't invoked)
+- IMAP credentials, supplied either as `IMAP_*` environment variables/`.env`,
+  or via an existing `proton-mail-bridge-client` MCP config with Proton
+  Bridge's IMAP host/port/credentials (only read for connection details —
+  the CLI itself isn't invoked) — see *Credentials* below
 - `node` (18+)
 
 ## Configuration
 
-The script reads these from the environment, each falling back to a default
-for this machine's layout — override them if yours differs:
+The script reads these from the environment, each falling back to a default —
+override them if yours differs:
 
 | Variable | Default |
 | --- | --- |
+| `ENV_FILE` | `.env` next to the script (its real path, resolved through the `PATH` symlink) |
 | `CONFIG_JSON` | path to the MCP config containing Proton Bridge credentials |
 | `STATE_DIR` | `~/.claude-magic-link-watcher` |
 | `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
@@ -59,36 +60,74 @@ for this machine's layout — override them if yours differs:
 | `OPEN_DELAY_SECONDS` | `0` — wait this long after a match before opening the link |
 | `IDLE_THRESHOLD_SECONDS` | `0` (disabled) — skip opening if the keyboard/mouse have been idle at least this long |
 
-### `CONFIG_JSON` format
+### Credentials: `.env` or `CONFIG_JSON`
 
-`loadCredentials()` only reads five fields out of an MCP-config-shaped JSON
-file — it doesn't actually require Proton Bridge, `proton-mail-bridge-client`,
-or Claude Desktop. Any IMAP account (Proton Bridge's local endpoint, Gmail
-with an app password, Fastmail, self-hosted, etc.) works as long as the file
-at `CONFIG_JSON` has this shape:
+There are two ways to supply IMAP credentials, checked in this order:
+
+1. **`IMAP_HOST` / `IMAP_USERNAME` / `IMAP_PASSWORD`** (plus optional
+   `IMAP_PORT`, default `993`, and `IMAP_SECURE`, default `true`) set
+   directly as environment variables, or placed in a `.env` file — by
+   default `.env` next to the script itself (override the location with
+   `ENV_FILE`). `.env` format is one `KEY=VALUE` per line, `#` comments and
+   blank lines ignored, values may be wrapped in quotes. A real environment
+   variable always takes precedence over the same key in `.env`. This is
+   the simplest option if you're setting this up for a non-Proton account
+   and don't already have an MCP config lying around.
+2. Otherwise, **`CONFIG_JSON`** — `loadCredentials()` falls back to reading
+   five fields out of an MCP-config-shaped JSON file. It doesn't actually
+   require Proton Bridge, `proton-mail-bridge-client`, or Claude Desktop —
+   any IMAP account works as long as the file at `CONFIG_JSON` has this
+   shape:
 
 ```json
 {
   "mcpServers": {
     "proton-mail-bridge": {
       "env": {
-        "PROTONMAIL_IMAP_HOST": "127.0.0.1",
-        "PROTONMAIL_IMAP_PORT": "1143",
-        "PROTONMAIL_IMAP_SECURE": "false",
-        "PROTONMAIL_USERNAME": "you@example.com",
-        "PROTONMAIL_PASSWORD": "your-imap-password"
+        "IMAP_HOST": "127.0.0.1",
+        "IMAP_PORT": "1143",
+        "IMAP_SECURE": "false",
+        "IMAP_USERNAME": "you@example.com",
+        "IMAP_PASSWORD": "your-imap-password"
       }
     }
   }
 }
 ```
 
-The `mcpServers.proton-mail-bridge` key path and the `PROTONMAIL_*` variable
-names are fixed (the script looks them up literally) — only the values need
-to point at your actual IMAP server. For a non-Bridge IMAP host, set
-`PROTONMAIL_IMAP_SECURE` to `"true"` and `PROTONMAIL_IMAP_PORT` to your
-provider's TLS port (e.g. `993`); `PROTONMAIL_IMAP_HOST` doesn't need to be
-`127.0.0.1` — Bridge is just what makes that the common case.
+The `mcpServers.proton-mail-bridge` key path and the `IMAP_*` variable names
+are fixed (the script looks them up literally) — only the values need to
+point at your actual IMAP server. For a non-Bridge IMAP host, set
+`IMAP_SECURE` to `"true"` and `IMAP_PORT` to your provider's TLS port (e.g.
+`993`); `IMAP_HOST` doesn't need to be `127.0.0.1` — Bridge is just what
+makes that the common case.
+
+Requirements for use with mail servers:
+
+1. **IMAP enabled** on the account (Gmail, Fastmail, iCloud, Outlook,
+   self-hosted, etc. all support this, though some require turning it on).
+2. **Password-based auth**, not OAuth — the script authenticates with a
+   plain username/password, with no OAuth2 flow. So:
+   - Gmail: needs an **app password** (requires 2FA enabled).
+   - iCloud, Fastmail, Yahoo: same, an app-specific password.
+   - Office 365/Outlook: many tenants have disabled basic-auth IMAP
+     entirely in favor of OAuth-only — this would block it unless the
+     tenant still allows app passwords.
+3. **TLS settings matched to the provider** — set `IMAP_SECURE=true` and
+   the provider's TLS port (usually `993`). The TLS certificate relaxation
+   in the code only applies when `IMAP_HOST` is `127.0.0.1`/`localhost`, so
+   a real provider still gets proper certificate validation.
+4. **IDLE support**, for the near-instant detection this script is built
+   around. Gmail, Fastmail, iCloud, and most modern IMAP servers support
+   it; a provider without IDLE would fall back to whatever `imapflow` does
+   in that case (not verified here — check `imapflow`'s docs if you pick
+   such a provider).
+5. **The magic-link email actually lands in that inbox** — true by
+   construction if it's the same address you sign into Claude.ai with.
+
+Everything else — subject match, the `SENDER_SUFFIX` DMARC-backed sender
+check, dedup by `Message-ID`, link extraction/opening — is already
+provider-agnostic.
 
 ## Install
 
@@ -103,15 +142,22 @@ onto your `PATH` so `node_modules` still resolves via the script's real path:
 ln -s "$(pwd)/claude-magic-link-watcher" ~/.local/bin/claude-magic-link-watcher
 ```
 
-To run it as a background service on macOS via `launchd`, edit the paths and
-label in `launchd/gs.wbig.claude-magic-link-watcher.plist` (the `gs.wbig`
-label prefix is mine — swap in your own reverse-DNS scheme) — note the
-`PATH` set in `EnvironmentVariables` needs to include wherever `node` lives
-(e.g. `/opt/homebrew/bin`), since launchd's default `PATH` is minimal and
-won't resolve the script's `#!/usr/bin/env node` shebang otherwise. Then:
+To run it as a background service on macOS via `launchd`, first swap in your
+own label in `launchd/gs.wbig.claude-magic-link-watcher.plist` (the `gs.wbig`
+prefix is mine — use your own reverse-DNS scheme if you like), and check the
+`PATH` set in `EnvironmentVariables` includes wherever `node` lives (e.g.
+`/opt/homebrew/bin`), since launchd's default `PATH` is minimal and won't
+resolve the script's `#!/usr/bin/env node` shebang otherwise.
+
+The plist's paths use a `__HOME__` placeholder rather than a hardcoded home
+directory — launchd doesn't expand `~` or `$HOME` in `<string>` values (it
+reads the XML literally, no shell involved), so those have to be substituted
+before the file is installed rather than left for launchd to resolve at
+load time:
 
 ```bash
-cp launchd/gs.wbig.claude-magic-link-watcher.plist ~/Library/LaunchAgents/
+sed "s|__HOME__|$HOME|g" launchd/gs.wbig.claude-magic-link-watcher.plist \
+  > ~/Library/LaunchAgents/gs.wbig.claude-magic-link-watcher.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-link-watcher.plist
 ```
 
@@ -172,7 +218,9 @@ meant for a personal inbox on a trusted machine either way.
 Set `IDLE_THRESHOLD_SECONDS` to skip auto-opening whenever the machine has
 been idle (no keyboard/mouse/trackpad input) for at least that long — checked
 via macOS's `IOHIDSystem` idle counter (`ioreg -c IOHIDSystem`, `HIDIdleTime`
-in nanoseconds) right before opening. A legitimate sign-in is normally
+in nanoseconds) right before opening. An intentional sign-in is normally
 requested by someone actively at the keyboard; a link arriving while the
 machine has sat idle for several minutes is a signal worth not auto-completing
-even if the sender check passes.
+even if the sender check passes (for example, you might be logging in to
+Claude on a separate device, and you don't want this script to steal the
+magic link).

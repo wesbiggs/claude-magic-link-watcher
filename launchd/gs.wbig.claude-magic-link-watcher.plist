@@ -6,7 +6,7 @@
 	<string>gs.wbig.claude-magic-link-watcher</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/wes/.local/bin/claude-magic-link-watcher</string>
+		<string>__HOME__/.local/bin/claude-magic-link-watcher</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -23,8 +23,8 @@
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 	<key>StandardOutPath</key>
-	<string>/Users/wes/Library/Logs/claude-magic-link-watcher/stdout.log</string>
+	<string>__HOME__/Library/Logs/claude-magic-link-watcher/stdout.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/wes/Library/Logs/claude-magic-link-watcher/stderr.log</string>
+	<string>__HOME__/Library/Logs/claude-magic-link-watcher/stderr.log</string>
 </dict>
 </plist>

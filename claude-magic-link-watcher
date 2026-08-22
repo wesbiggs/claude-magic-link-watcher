@@ -17,9 +17,38 @@ const { simpleParser } = require('mailparser');
 
 const execFileAsync = promisify(execFile);
 
+// __dirname resolves through symlinks to the script's real location (Node's
+// default module-loading behavior), matching how node_modules is found when
+// this script is symlinked onto PATH — so the default .env lives next to the
+// script itself regardless of where it's invoked from.
+const ENV_FILE = process.env.ENV_FILE || path.join(__dirname, '.env');
+
+// Minimal .env loader: KEY=VALUE per line, optional quotes, '#' comments.
+// Only fills vars not already set in the real environment, so a value passed
+// via shell/launchd always wins over the file.
+function loadDotEnv() {
+  if (!fs.existsSync(ENV_FILE)) return;
+  for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+loadDotEnv();
+
 const CONFIG_JSON =
   process.env.CONFIG_JSON ||
-  '/Users/wes/Library/Application Support/Claude/claude_desktop_config.json';
+  path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
 const STATE_DIR = process.env.STATE_DIR || path.join(os.homedir(), '.claude-magic-link-watcher');
 const SEEN_FILE = path.join(STATE_DIR, 'seen-ids.txt');
 const SUBJECT_PREFIX = process.env.SUBJECT_PREFIX || 'Your secure link to Claude.ai is here';
@@ -43,17 +72,29 @@ function log(msg) {
   process.stderr.write(`${ts} [magic-link-watcher] ${msg}\n`);
 }
 
-// Loads Proton Bridge IMAP credentials from the existing Claude Desktop MCP
-// config rather than duplicating the password into this script.
+// Loads IMAP credentials either directly from the environment (real env vars
+// or ENV_FILE, e.g. IMAP_HOST/IMAP_USERNAME/IMAP_PASSWORD) or, failing that,
+// from an existing MCP config's env block (e.g. Claude Desktop's) — so a
+// password never has to be duplicated into this script or a dedicated config
+// file if it's already sitting in one of those two places.
 function loadCredentials() {
+  if (process.env.IMAP_HOST && process.env.IMAP_USERNAME && process.env.IMAP_PASSWORD) {
+    return {
+      host: process.env.IMAP_HOST,
+      port: parseInt(process.env.IMAP_PORT || '993', 10),
+      secure: (process.env.IMAP_SECURE || 'true') === 'true',
+      user: process.env.IMAP_USERNAME,
+      pass: process.env.IMAP_PASSWORD,
+    };
+  }
   const cfg = JSON.parse(fs.readFileSync(CONFIG_JSON, 'utf8'));
   const env = cfg.mcpServers['proton-mail-bridge'].env;
   return {
-    host: env.PROTONMAIL_IMAP_HOST,
-    port: parseInt(env.PROTONMAIL_IMAP_PORT, 10),
-    secure: env.PROTONMAIL_IMAP_SECURE === 'true',
-    user: env.PROTONMAIL_USERNAME,
-    pass: env.PROTONMAIL_PASSWORD,
+    host: env.IMAP_HOST,
+    port: parseInt(env.IMAP_PORT, 10),
+    secure: env.IMAP_SECURE === 'true',
+    user: env.IMAP_USERNAME,
+    pass: env.IMAP_PASSWORD,
   };
 }
 
