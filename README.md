@@ -1,7 +1,7 @@
 # claude-magic-link-watcher
 
 Watches an IMAP inbox via [`imapflow`](https://imapflow.com/) for
-"Your secure link to Claude.ai is here" emails and automatically opens
+"Your secure link to Claude" emails and automatically opens
 the magic sign-in link in the default browser.
 
 Works out of the box with [Proton Mail Bridge](https://proton.me/mail/bridge)'s
@@ -52,7 +52,7 @@ override them if yours differs:
 | `ENV_FILE` | `.env` next to the script (its real path, resolved through the `PATH` symlink) |
 | `CONFIG_JSON` | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | `STATE_DIR` | `~/.claude-magic-link-watcher` |
-| `SUBJECT_PREFIX` | `Your secure link to Claude.ai is here` |
+| `SUBJECT_PREFIX` | `Your secure link to Claude` |
 | `SENDER_SUFFIX` | `@mail.anthropic.com` |
 | `FOLDER` | `INBOX` |
 | `CONFIRM_BEFORE_OPEN` | `false` — set to `true` to require clicking "Open" in a dialog before the link opens |
