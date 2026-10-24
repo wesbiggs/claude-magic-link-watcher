@@ -1,16 +1,22 @@
 {
   "name": "claude-magic-link-watcher",
-  "version": "2.0.1",
-  "private": true,
-  "description": "Watches a Proton Mail inbox directly via IMAP IDLE for Claude.ai magic sign-in links and opens them automatically.",
-  "type": "commonjs",
-  "main": "claude-magic-link-watcher",
+  "description": "Watches an IMAP inbox directly via IMAP IDLE for Claude.ai magic sign-in links and opens them automatically",
+  "type": "module",
   "bin": {
     "claude-magic-link-watcher": "./claude-magic-link-watcher"
+  },
+  "scripts": {
+    "lint": "eslint",
+    "lint:fix": "eslint --fix"
   },
   "license": "Apache-2.0",
   "dependencies": {
     "imapflow": "^1.7.8",
     "mailparser": "^3.9.28"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0"
   }
 }

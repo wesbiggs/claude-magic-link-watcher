@@ -1,19 +1,17 @@
 #!/usr/bin/env node
-// Watches a Proton Mail inbox directly over IMAP IDLE for "Your secure link
+// Watches an IMAP inbox directly over IMAP IDLE for "Your secure link
 // to Claude.ai is here" emails and opens the magic sign-in link in the
-// default browser. No dependency on proton-mail-bridge-client's CLI — talks
-// to Proton Bridge's local IMAP endpoint directly via imapflow, holding one
-// persistent connection so detection is near-instant instead of paying a
-// fresh-process-per-lookup cost.
+// default browser.
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-const { ImapFlow } = require('imapflow');
-const { simpleParser } = require('mailparser');
+import { execFile } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +19,8 @@ const execFileAsync = promisify(execFile);
 // default module-loading behavior), matching how node_modules is found when
 // this script is symlinked onto PATH — so the default .env lives next to the
 // script itself regardless of where it's invoked from.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const ENV_FILE = process.env.ENV_FILE || path.join(__dirname, '.env');
 
 // Minimal .env loader: KEY=VALUE per line, optional quotes, '#' comments.
@@ -37,7 +37,7 @@ function loadDotEnv() {
     let value = trimmed.slice(eq + 1).trim();
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
+        (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
     }
@@ -47,8 +47,8 @@ function loadDotEnv() {
 loadDotEnv();
 
 const CONFIG_JSON =
-  process.env.CONFIG_JSON ||
-  path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+      process.env.CONFIG_JSON ||
+      path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
 const STATE_DIR = process.env.STATE_DIR || path.join(os.homedir(), '.claude-magic-link-watcher');
 const SEEN_FILE = path.join(STATE_DIR, 'seen-ids.txt');
 const SUBJECT_PREFIX = process.env.SUBJECT_PREFIX || 'Your secure link to Claude.ai is here';
@@ -93,11 +93,11 @@ function loadCredentials() {
   const cfg = JSON.parse(fs.readFileSync(CONFIG_JSON, 'utf8'));
   const env = cfg.mcpServers['proton-mail-bridge'].env;
   return {
-    host: env.IMAP_HOST,
-    port: parseInt(env.IMAP_PORT, 10),
-    secure: env.IMAP_SECURE === 'true',
-    user: env.IMAP_USERNAME,
-    pass: env.IMAP_PASSWORD,
+    host: env.IMAP_HOST || env.PROTONMAIL_IMAP_HOST,
+    port: parseInt(env.IMAP_PORT || env.PROTONMAIL_IMAP_PORT, 10),
+    secure: env.IMAP_SECURE === 'true' || env.PROTONMAIL_IMAP_SECURE === 'true',
+    user: env.IMAP_USERNAME || env.PROTONMAIL_USERNAME,
+    pass: env.IMAP_PASSWORD || env.PROTONMAIL_PASSWORD,
   };
 }
 
@@ -267,7 +267,7 @@ async function watchOnce() {
   client.on('error', (err) => log(`IMAP error: ${err.message}`));
 
   await client.connect();
-  log('Proton Bridge IMAP is ready.');
+  log('IMAP is ready.');
   await client.mailboxOpen(FOLDER);
 
   log('Priming seen-list from existing mail...');
@@ -295,7 +295,7 @@ async function watchOnce() {
 }
 
 async function main() {
-  log(`Starting. Waiting for Proton Bridge before watching ${FOLDER}...`);
+  log(`Starting. Waiting for IMAP before watching ${FOLDER}...`);
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
 
@@ -305,9 +305,10 @@ async function main() {
       await watchOnce();
       attempt = 0;
     } catch (err) {
+      log(JSON.stringify(err));
       attempt += 1;
       if (attempt === 1 || attempt % 8 === 0) {
-        log(`Waiting for Proton Bridge (attempt ${attempt}): ${err.message}`);
+        log(`Waiting for IMAP (attempt ${attempt}): ${err.message}`);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, RECONNECT_DELAY_MS));

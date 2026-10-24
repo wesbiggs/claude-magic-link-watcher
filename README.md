@@ -145,20 +145,30 @@ ln -s "$(pwd)/claude-magic-link-watcher" ~/.local/bin/claude-magic-link-watcher
 
 To run it as a background service on macOS via `launchd`, first swap in your
 own label in `launchd/gs.wbig.claude-magic-link-watcher.plist` (the `gs.wbig`
-prefix is mine — use your own reverse-DNS scheme if you like), and check the
-`PATH` set in `EnvironmentVariables` includes wherever `node` lives (e.g.
-`/opt/homebrew/bin`), since launchd's default `PATH` is minimal and won't
-resolve the script's `#!/usr/bin/env node` shebang otherwise.
+prefix is mine — use your own reverse-DNS scheme if you like).
 
-The plist's paths use a `__HOME__` placeholder rather than a hardcoded home
-directory — launchd doesn't expand `~` or `$HOME` in `<string>` values (it
-reads the XML literally, no shell involved), so those have to be substituted
-before the file is installed rather than left for launchd to resolve at
-load time:
+The plist uses placeholders rather than hardcoded paths — launchd doesn't
+expand `~` or `$HOME` in `<string>` values (it reads the XML literally, no
+shell involved), so they have to be substituted before the file is
+installed rather than left for launchd to resolve at load time:
+
+- `__HOME__` — your home directory.
+- `__NODE_BIN__` — the directory containing `node`, prepended to the
+  service's `PATH`. launchd's default `PATH` is minimal and won't resolve
+  the script's `#!/usr/bin/env node` shebang otherwise, especially for
+  version-manager installs (mise, nvm, fnm, asdf) that live under your
+  home directory. This bakes in the `node` your shell resolves at install
+  time, so re-run the install after switching Node versions if that path
+  changes.
+
+launchd also won't create the log directory, so make it first:
 
 ```bash
-sed "s|__HOME__|$HOME|g" launchd/gs.wbig.claude-magic-link-watcher.plist \
+mkdir -p ~/Library/Logs/claude-magic-link-watcher
+sed -e "s|__HOME__|$HOME|g" -e "s|__NODE_BIN__|$(dirname "$(command -v node)")|g" \
+  launchd/gs.wbig.claude-magic-link-watcher.plist \
   > ~/Library/LaunchAgents/gs.wbig.claude-magic-link-watcher.plist
+launchctl bootout gui/$(id -u)/gs.wbig.claude-magic-link-watcher 2>/dev/null
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/gs.wbig.claude-magic-link-watcher.plist
 ```
 
